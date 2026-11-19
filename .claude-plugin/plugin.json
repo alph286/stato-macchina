@@ -1,7 +1,7 @@
 {
   "name": "stato-macchina",
-  "version": "0.3.0",
-  "description": "Pannello con CPU, GPU, RAM, swap, disco, temperatura, contesto e limiti d'uso della macchina su cui gira Claude Code",
+  "version": "0.4.0",
+  "description": "Pannello con CPU, GPU, RAM, swap, disco, temperatura, costo della sessione, contesto e limiti d'uso della macchina su cui gira Claude Code",
   "author": { "name": "alph286" },
   "license": "MIT",
   "repository": "https://github.com/alph286/stato-macchina",

@@ -108,7 +108,8 @@ for (const [nome, usage, attesi] of [
       { kind: 'five_hour', percentUsed: 23.5, resetsAt: new Date(1 + (2 * 60 + 15) * 60_000).toISOString() },
       { kind: 'seven_day', percentUsed: 7, resetsAt: new Date(1 + (3 * 24 + 4) * 3_600_000).toISOString() },
     ],
-  }, [/Ctx   █+░+ 142k/, /di 200k · finestra 1M/, /5h    █+░+  24%/, /reset tra 2h 15m/, /7g    ██░+   7%/, /reset tra 3g 4h/]],
+    cost: { usd: 3.456 },
+  }, [/Costo ~\$3\.46  stima sessione/, /Ctx   █+░+ 142k/, /di 200k · finestra 1M/, /5h    █+░+  24%/, /reset tra 2h 15m/, /7g    ██░+   7%/, /reset tra 3g 4h/]],
   ['contesto appena compattato', { startedAt: 0, context: { window: 200_000 }, rateLimits: [] },
     [/Ctx   — in attesa di una risposta/]],
 ] as const) {

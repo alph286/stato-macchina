@@ -91,6 +91,7 @@ percentage.
 | Throttling | `vcgencmd get_throttled` (Raspberry Pi only) |
 | Uptime | `/proc/uptime` |
 | Model and cache (below the animated line) | the main conversation's last request: model, time left on the prompt cache (5m or 1h from the last request), share of input tokens read from cache. Before the first request it shows the `/model` model and `cache —` |
+| Cost (`Costo`) | the session's cost in dollars, as `/cost` totals it (`$.session.usage().cost`), subagent and mod requests included. An estimate, not the bill: on a subscription it is not a charge. Starts over after `/clear` |
 | Context (`Ctx`) | input tokens of the last response, as in the status line (`$.session.usage()`). The bar runs from 0 to 200k, the point where I `/clear` or `/compact` (or to the model's window if smaller); the right side shows tokens used, the line below the model's full window. Right after `/clear` or `/compact` it shows `—` until the next response. The threshold is `CTX_LIMIT` in `hooks/register.tsx` |
 | Usage limits (`5h`, `7g`) | the subscription's 5-hour and 7-day windows, with time left until reset; hidden without a subscription or before the first response |
 

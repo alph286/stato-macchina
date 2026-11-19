@@ -256,6 +256,8 @@ export const register: Register = on => {
     let usage: Awaited<ReturnType<typeof $.session.usage>> | null = null
     try { usage = await $.session.usage() } catch { usage = null }
     const ctx = usage?.context
+    // Costo della sessione come lo totalizza /cost: una stima, non la bolletta.
+    const cost = usage?.cost
     const ctxMax = Math.min(CTX_LIMIT, ctx?.window || CTX_LIMIT)
     const ctxTok = ctx?.tokens
     const limits = (usage?.rateLimits ?? []).filter(r => RL_LABEL[r.kind])
@@ -285,6 +287,13 @@ export const register: Register = on => {
           <Text color={cacheCol} dimColor={!cacheCol}>{cacheTxt}</Text>
           {hit && <Text dimColor>  {hit}</Text>}
         </Text>
+        {cost && (
+          <Text wrap="truncate">
+            <Text bold>{'Costo '}</Text>
+            <Text>~${cost.usd < 100 ? cost.usd.toFixed(2) : Math.round(cost.usd)}</Text>
+            <Text dimColor>{'  stima sessione' + (cost.hasUnknownPrice ? ' (prezzo ignoto)' : '')}</Text>
+          </Text>
+        )}
         {ctx && (ctxTok !== undefined
           ? <Bar label="Ctx" p={pct(ctxTok, ctxMax)} right={fmtK(ctxTok).padStart(4)}
               info={`di ${fmtK(ctxMax)}` + (ctx.window > ctxMax ? ` · finestra ${fmtK(ctx.window)}` : '')} />
