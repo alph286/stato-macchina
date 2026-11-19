@@ -213,7 +213,17 @@ export const register: Register = on => {
     const cols = Math.max(20, e.props.bodyColumns ?? 34)
     // etichetta 6 + barra + " 100%" 5
     const barW = Math.max(6, Math.min(30, cols - 11))
-    const color = (p: number) => (p >= 85 ? 'error' : p >= 65 ? 'warning' : 'success')
+    // Sfumatura continua verde → giallo (50%) → rosso (100%): tinta HSL da 120° a 0°.
+    const color = (p: number) => {
+      const hue = 120 * (1 - Math.min(100, Math.max(0, p)) / 100)
+      const s = 0.75, l = 0.5
+      const f = (k: number) => {
+        const x = (k + hue / 30) % 12
+        const v = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(x - 3, 9 - x, 1))
+        return Math.round(v * 255).toString(16).padStart(2, '0')
+      }
+      return `#${f(0)}${f(8)}${f(4)}`
+    }
     const Bar = ({ label, p, info, right }: { label: string; p: number; info?: string; right?: string }) => {
       const n = Math.round((Math.min(100, Math.max(0, p)) / 100) * barW)
       return (

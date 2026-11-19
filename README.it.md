@@ -70,7 +70,8 @@ claude plugin install stato-macchina --marketplace alph286/stato-macchina
 /stato
 ```
 
-Le barre sono verdi sotto il 65%, gialle dal 65% e rosse dall'85%. Sono
+Il colore delle barre sfuma dal verde (0%) al giallo (50%) al rosso
+(100%), così cambia man mano che il valore cresce. Sono
 larghe al massimo 30 caratteri e si accorciano nei pannelli più stretti.
 La barra della temperatura va da 0 a 100 °C e mostra i gradi invece della
 percentuale.

@@ -73,7 +73,8 @@ claude plugin install stato-macchina --marketplace alph286/stato-macchina
 /stato
 ```
 
-Bars are green below 65%, yellow from 65% and red from 85%. They are at
+Bar colour shifts gradually from green (0%) through yellow (50%) to red
+(100%), so it changes as the value grows. They are at
 most 30 characters wide and shrink to fit narrower panels. The
 temperature bar spans 0 to 100 °C and shows degrees instead of a
 percentage.
