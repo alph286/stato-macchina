@@ -69,6 +69,19 @@ function b64(b: Uint8Array): string {
 // "claude-opus-5-5" -> "opus-5-5"; toglie anche il suffisso data.
 const shortModel = (m: string) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/\[.*\]$/, '')
 const fmtLeft = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m` : `${Math.ceil(ms / 1000)}s`)
+// 142000 -> "142k", 1000000 -> "1M"
+const fmtK = (n: number) =>
+  n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
+// Tempo che manca a un reset: "3g 4h", "2h 15m", "40m".
+const fmtIn = (ms: number) => {
+  const m = Math.max(0, Math.round(ms / 60_000))
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60
+  return d > 0 ? `${d}g ${h}h` : h > 0 ? `${h}h ${mm}m` : `${mm}m`
+}
+// Soglia a cui Alph fa /clear o /compact: la barra del contesto va da 0 a qui
+// (o alla finestra del modello, se è più piccola).
+const CTX_LIMIT = 200_000
+const RL_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7g', spend_limit: 'Spesa' }
 
 async function run($: EngineInterface, argv: string[]): Promise<string | null> {
   try {
@@ -239,6 +252,13 @@ export const register: Register = on => {
         else { cacheTxt = `● ${fmtLeft(left)}/${L.ttl}`; cacheCol = left / ttlMs > 0.25 ? 'success' : 'warning' }
       } else if (tot > 0) cacheTxt = L.read > 0 ? '● letta' : '○ nessuna'
     }
+    // Contesto e limiti d'uso, come li ha la status line (chiamata gratuita).
+    let usage: Awaited<ReturnType<typeof $.session.usage>> | null = null
+    try { usage = await $.session.usage() } catch { usage = null }
+    const ctx = usage?.context
+    const ctxMax = Math.min(CTX_LIMIT, ctx?.window || CTX_LIMIT)
+    const ctxTok = ctx?.tokens
+    const limits = (usage?.rateLimits ?? []).filter(r => RL_LABEL[r.kind])
     const terminal = e.surface === 'terminal'
     if (terminal) divCols = cols
     return (
@@ -265,6 +285,15 @@ export const register: Register = on => {
           <Text color={cacheCol} dimColor={!cacheCol}>{cacheTxt}</Text>
           {hit && <Text dimColor>  {hit}</Text>}
         </Text>
+        {ctx && (ctxTok !== undefined
+          ? <Bar label="Ctx" p={pct(ctxTok, ctxMax)} right={fmtK(ctxTok).padStart(4)}
+              info={`di ${fmtK(ctxMax)}` + (ctx.window > ctxMax ? ` · finestra ${fmtK(ctx.window)}` : '')} />
+          : <Text wrap="truncate"><Text bold>{'Ctx   '}</Text><Text dimColor>— in attesa di una risposta</Text></Text>)}
+        {limits.map(r => {
+          const at = r.resetsAt ? Date.parse(r.resetsAt) : NaN
+          return <Bar key={r.kind} label={RL_LABEL[r.kind]!} p={r.percentUsed}
+            info={Number.isFinite(at) ? `reset tra ${fmtIn(at - s.at)}` : undefined} />
+        })}
       </Box>
     )
   })

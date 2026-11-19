@@ -88,6 +88,8 @@ percentuale.
 | Throttling | `vcgencmd get_throttled` (solo Raspberry Pi) |
 | Uptime | `/proc/uptime` |
 | Modello e cache (sotto la riga animata) | l'ultima richiesta della conversazione principale: modello, tempo che resta alla cache del prompt (5m o 1h dall'ultima richiesta), quota di token in ingresso letti dalla cache. Prima della prima richiesta mostra il modello di `/model` e `cache —` |
+| Contesto (`Ctx`) | token in ingresso dell'ultima risposta, come nella status line (`$.session.usage()`). La barra va da 0 a 200k, la soglia a cui faccio `/clear` o `/compact` (o alla finestra del modello se è più piccola); a destra i token usati, sotto la finestra intera del modello. Subito dopo `/clear` o `/compact` mostra `—` fino alla risposta successiva. La soglia è `CTX_LIMIT` in `hooks/register.tsx` |
+| Limiti d'uso (`5h`, `7g`) | le finestre di 5 ore e 7 giorni dell'abbonamento, con il tempo che manca al reset; non compaiono senza abbonamento o prima della prima risposta |
 
 Funziona su Linux (anche WSL). Le voci che la macchina non ha, per esempio
 la GPU senza `nvidia-smi` né `vcgencmd`, semplicemente non compaiono.

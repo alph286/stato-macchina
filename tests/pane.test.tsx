@@ -99,3 +99,35 @@ for (const [nome, llm, atteso] of [
     await ui.unmount()
   })
 }
+
+for (const [nome, usage, attesi] of [
+  ['contesto 142k su finestra 1M e limiti', {
+    startedAt: 0,
+    context: { tokens: 142_000, window: 1_000_000, percent: 14 },
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 23.5, resetsAt: new Date(1 + (2 * 60 + 15) * 60_000).toISOString() },
+      { kind: 'seven_day', percentUsed: 7, resetsAt: new Date(1 + (3 * 24 + 4) * 3_600_000).toISOString() },
+    ],
+  }, [/Ctx   █+░+ 142k/, /di 200k · finestra 1M/, /5h    █+░+  24%/, /reset tra 2h 15m/, /7g    ██░+   7%/, /reset tra 3g 4h/]],
+  ['contesto appena compattato', { startedAt: 0, context: { window: 200_000 }, rateLimits: [] },
+    [/Ctx   — in attesa di una risposta/]],
+] as const) {
+  test(`contesto e limiti: ${nome}`, async ($, on) => {
+    on('command.register', () => ({ value: { command: 'stato' } }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.every', () => ({ value: { cancel: () => {} } } as any))
+    on('clock.now', () => ({ value: 1 }))
+    on('session.model', () => ({ value: 'claude-opus-5-5' }))
+    on('session.usage', () => ({ value: usage } as any))
+    on('fs.read', (_, e: any) => ({ value: FILES[e.path] ?? '' }))
+    on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } } as any))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const txt = flat(await ui.drawn())
+    ;(globalThis as any).console.log(txt.split('\n').slice(-6).join('\n'))
+    for (const a of attesi) expect(txt).toMatch(a)
+    for (const line of txt.split('\n')) expect(line.length <= 34).toBe(true)
+    await ui.unmount()
+  })
+}
