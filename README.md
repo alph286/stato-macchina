@@ -73,8 +73,11 @@ claude plugin install stato-macchina --marketplace alph286/stato-macchina
 /stato
 ```
 
-Bar colour shifts gradually from green (0%) through yellow (50%) to red
-(100%), so it changes as the value grows. They are at
+Machine bars turn yellow and red at fixed thresholds: RAM and disk at
+80% and 90% (usual monitoring thresholds), temperature at 70 °C and 80 °C
+(the Raspberry Pi firmware throttles from 80 °C), swap at 25% and 50%,
+CPU and GPU at 65% and 85%. Context and usage-limit bars shift gradually
+from green (0%) through yellow (50%) to red (100%). They are at
 most 30 characters wide and shrink to fit narrower panels. The
 temperature bar spans 0 to 100 °C and shows degrees instead of a
 percentage.

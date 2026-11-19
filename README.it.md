@@ -70,8 +70,11 @@ claude plugin install stato-macchina --marketplace alph286/stato-macchina
 /stato
 ```
 
-Il colore delle barre sfuma dal verde (0%) al giallo (50%) al rosso
-(100%), così cambia man mano che il valore cresce. Sono
+Le barre della macchina diventano gialle e rosse a soglie fisse: RAM e
+disco a 80% e 90% (le soglie abituali di monitoraggio), temperatura a
+70 °C e 80 °C (da 80 °C il firmware del Raspberry Pi rallenta la CPU),
+swap a 25% e 50%, CPU e GPU a 65% e 85%. Le barre del contesto e dei
+limiti d'uso sfumano dal verde (0%) al giallo (50%) al rosso (100%). Sono
 larghe al massimo 30 caratteri e si accorciano nei pannelli più stretti.
 La barra della temperatura va da 0 a 100 °C e mostra i gradi invece della
 percentuale.

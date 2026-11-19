@@ -81,6 +81,15 @@ const fmtIn = (ms: number) => {
 // Soglia a cui Alph fa /clear o /compact: la barra del contesto va da 0 a qui
 // (o alla finestra del modello, se è più piccola).
 const CTX_LIMIT = 200_000
+// Soglie [giallo, rosso] delle barre della macchina.
+// RAM e disco: 80/90%, le soglie abituali di monitoraggio (check_disk, dashboard Node Exporter).
+// Temp: sul Raspberry Pi il firmware rallenta la CPU da 80 °C; giallo da 70 °C come preavviso.
+// CPU e GPU: nessuno standard, picchi brevi sono normali; restano le vecchie 65/85.
+// Swap: con la RAM piena il Pi rallenta molto già usando swap; giallo dal 25%, rosso dal 50%.
+type Lim = [number, number]
+const LIM: Record<'cpu' | 'ram' | 'swap' | 'disk' | 'temp', Lim> = {
+  cpu: [65, 85], ram: [80, 90], swap: [25, 50], disk: [80, 90], temp: [70, 80],
+}
 const RL_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7g', spend_limit: 'Spesa' }
 
 async function run($: EngineInterface, argv: string[]): Promise<string | null> {
@@ -224,13 +233,15 @@ export const register: Register = on => {
       }
       return `#${f(0)}${f(8)}${f(4)}`
     }
-    const Bar = ({ label, p, info, right }: { label: string; p: number; info?: string; right?: string }) => {
+    // Soglie [giallo, rosso] delle barre della macchina; senza soglie la barra sfuma.
+    const step = (p: number, [w, c]: Lim) => (p >= c ? 'error' : p >= w ? 'warning' : 'success')
+    const Bar = ({ label, p, info, right, lim }: { label: string; p: number; info?: string; right?: string; lim?: Lim }) => {
       const n = Math.round((Math.min(100, Math.max(0, p)) / 100) * barW)
       return (
         <Box flexDirection="column">
           <Box>
             <Text bold>{label.padEnd(6)}</Text>
-            <Text color={color(p)}>{'█'.repeat(n)}</Text>
+            <Text color={lim ? step(p, lim) : color(p)}>{'█'.repeat(n)}</Text>
             <Text dimColor>{'░'.repeat(barW - n)}</Text>
             <Text> {right ?? String(Math.round(p)).padStart(3) + '%'}</Text>
           </Box>
@@ -276,15 +287,15 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Text bold color="claude">{s.host}  <Text dimColor>up {s.uptime}</Text></Text>
-        <Bar label="CPU" p={s.cpu} info={`${s.cores} core · load ${s.load}`} />
+        <Bar label="CPU" p={s.cpu} lim={LIM.cpu} info={`${s.cores} core · load ${s.load}`} />
         <Text color="suggestion">{'      ' + spark}</Text>
-        <Bar label="RAM" p={pct(s.memUsed, s.memTotal)} info={`${fmtG(s.memUsed)}/${fmtG(s.memTotal)} GiB`} />
-        {s.swapTotal > 0 && <Bar label="Swap" p={pct(s.swapUsed, s.swapTotal)} info={`${fmtG(s.swapUsed)}/${fmtG(s.swapTotal)} GiB`} />}
-        <Bar label="Disco" p={pct(s.diskUsed, s.diskTotal)} info={`/ ${fmtG(s.diskUsed)}/${fmtG(s.diskTotal)} GiB`} />
+        <Bar label="RAM" p={pct(s.memUsed, s.memTotal)} lim={LIM.ram} info={`${fmtG(s.memUsed)}/${fmtG(s.memTotal)} GiB`} />
+        {s.swapTotal > 0 && <Bar label="Swap" p={pct(s.swapUsed, s.swapTotal)} lim={LIM.swap} info={`${fmtG(s.swapUsed)}/${fmtG(s.swapTotal)} GiB`} />}
+        <Bar label="Disco" p={pct(s.diskUsed, s.diskTotal)} lim={LIM.disk} info={`/ ${fmtG(s.diskUsed)}/${fmtG(s.diskTotal)} GiB`} />
         {s.gpuPct !== null
-          ? <Bar label="GPU" p={s.gpuPct} info={s.gpu ?? ''} />
+          ? <Bar label="GPU" p={s.gpuPct} lim={LIM.cpu} info={s.gpu ?? ''} />
           : s.gpu && <Text><Text bold>{'GPU   '}</Text><Text>{s.gpu}</Text></Text>}
-        {s.tempC !== null && <Bar label="Temp" p={tp} right={`${Math.round(tp)}°C`} />}
+        {s.tempC !== null && <Bar label="Temp" p={tp} lim={LIM.temp} right={`${Math.round(tp)}°C`} />}
         {s.throttled && (
           <Text color={thOk ? 'success' : 'error'}>{thOk ? '      ✓ nessun throttling' : `      ✗ throttled ${s.throttled}`}</Text>
         )}
