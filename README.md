@@ -1,8 +1,10 @@
 # stato-macchina
 
-Una mod per [Claude Code](https://claude.com/claude-code) che apre un pannello
-con lo stato della macchina su cui gira Claude Code: CPU, GPU, RAM, swap,
-disco e temperatura. Si aggiorna ogni 2 secondi.
+English | [Italiano](README.it.md)
+
+A [Claude Code](https://claude.com/claude-code) mod that opens a panel with
+the status of the machine Claude Code is running on: CPU, GPU, RAM, swap,
+disk and temperature. It refreshes every 2 seconds.
 
 ```
 raspberrypi  up 8g 6h 29m
@@ -20,26 +22,29 @@ Temp  █████████████████░░░░░░░�
       ✓ nessun throttling
 ```
 
-## Perché nasce
+The panel's labels are in Italian (`Disco` = disk, `up 8g` = up 8 days,
+`nessun throttling` = no throttling).
 
-Uso Claude Code su un Raspberry Pi che fa da server di casa, e spesso lo
-apro via SSH dal tablet o dal telefono. Mentre Claude lavora (compila,
-scarica, lancia script) volevo vedere a colpo d'occhio se la macchina sta
-soffrendo: CPU al massimo, RAM finita, disco pieno, temperatura alta o
-throttling del Pi. Senza aprire un'altra sessione per lanciare `htop`, e
-senza cambiare finestra, cosa scomoda su uno schermo piccolo.
+## Why it exists
 
-Doveva quindi:
+I run Claude Code on a Raspberry Pi that works as a home server, and I
+often reach it over SSH from a tablet or a phone. While Claude is working
+(building, downloading, running scripts) I wanted to see at a glance
+whether the machine is struggling: CPU maxed out, RAM full, disk full, high
+temperature or the Pi throttling. Without opening a second session just to
+run `htop`, and without switching windows, which is awkward on a small
+screen.
 
-- stare dentro Claude Code, accanto alla conversazione;
-- leggersi bene anche su un terminale stretto come Termux sul telefono:
-  le barre si adattano alla larghezza del pannello e le righe non vanno
-  mai a capo;
-- non richiedere nient'altro da installare: legge `/proc`, `/sys` e `df`,
-  e per la GPU usa quello che trova (`nvidia-smi` sui PC, `vcgencmd` sul
+So it had to:
+
+- live inside Claude Code, next to the conversation;
+- stay readable on a narrow terminal such as Termux on a phone: the bars
+  fit the panel's width and lines never wrap;
+- need nothing else installed: it reads `/proc`, `/sys` and `df`, and for
+  the GPU it uses whatever it finds (`nvidia-smi` on PCs, `vcgencmd` on the
   Raspberry Pi).
 
-## Installazione
+## Install
 
 In Claude Code:
 
@@ -47,52 +52,56 @@ In Claude Code:
 /plugin install stato-macchina --marketplace alph286/stato-macchina
 ```
 
-Conferma con `y` l'aggiunta del marketplace, poi scegli dove installarla
-(per l'utente, per tutti i progetti).
+Answer `y` to add the marketplace, then pick the scope (for example user,
+for all your projects).
 
-Oppure da terminale:
+Or from a shell:
 
 ```bash
 claude plugin install stato-macchina --marketplace alph286/stato-macchina
 ```
 
-## Uso
+## Usage
 
-- Su un terminale largo almeno 144 colonne il pannello si apre da solo,
-  agganciato a destra della conversazione.
-- Su un terminale più stretto (tablet, telefono) aprilo con:
+- On a terminal at least 144 columns wide the panel opens by itself,
+  docked to the right of the conversation.
+- On a narrower terminal (tablet, phone) open it with:
 
 ```
 /stato
 ```
 
-Le barre sono verdi fino al 65%, gialle fino all'85% e rosse oltre.
+Bars are green below 65%, yellow from 65% and red from 85%. They are at
+most 30 characters wide and shrink to fit narrower panels. The
+temperature bar spans 0 to 100 °C and shows degrees instead of a
+percentage.
 
-## Cosa mostra e da dove lo legge
+## What it shows and where it reads it
 
-| Voce | Fonte |
+| Item | Source |
 | --- | --- |
-| CPU, core, load, mini-grafico degli ultimi 2 minuti | `/proc/stat`, `/proc/loadavg` |
-| RAM e swap | `/proc/meminfo` |
-| Disco `/` | `df` |
-| Temperatura | `/sys/class/thermal/thermal_zone0/temp` (o `vcgencmd measure_temp`) |
-| GPU | `nvidia-smi` se c'è (uso, memoria, temperatura), altrimenti `vcgencmd` (frequenza V3D, memoria GPU) |
-| Throttling | `vcgencmd get_throttled` (solo Raspberry Pi) |
+| CPU usage, cores, load average | `/proc/stat`, `/proc/loadavg` |
+| CPU sparkline: one bar per 2-second sample, as many as fit the bar width (up to 30, about the last minute) | `/proc/stat` |
+| RAM and swap (swap only if the machine has some) | `/proc/meminfo` |
+| Disk `/` | `df` |
+| Temperature | `/sys/class/thermal/thermal_zone0/temp`; on a Raspberry Pi without it, `vcgencmd measure_temp` |
+| GPU | `nvidia-smi` if present (usage bar, memory, temperature), otherwise `vcgencmd` (V3D clock, GPU memory) |
+| Throttling | `vcgencmd get_throttled` (Raspberry Pi only) |
 | Uptime | `/proc/uptime` |
 
-Funziona su Linux (anche WSL). Le voci che la macchina non ha, per esempio
-la GPU senza `nvidia-smi` né `vcgencmd`, semplicemente non compaiono.
+It works on Linux (WSL included). Items the machine does not have, for
+example the GPU without `nvidia-smi` or `vcgencmd`, simply do not appear.
 
-## Sviluppo
+## Development
 
 ```bash
 claude plugin validate .
 claude plugin test .
 ```
 
-I test simulano i dati e disegnano il pannello a 34, 48 e 106 colonne,
-controllando che nessuna riga superi la larghezza.
+The tests use simulated data and draw the panel at 34, 48 and 106 columns,
+checking that no line is wider than the panel.
 
-## Licenza
+## License
 
 MIT
