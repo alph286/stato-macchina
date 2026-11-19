@@ -20,6 +20,8 @@ Disco ████████████████░░░░░░░░�
 GPU   V3D 500 MHz · mem 76M
 Temp  █████████████████░░░░░░░░░░░ 62°C
       ✓ nessun throttling
+──────────━━━━━━━◆─────────────────
+opus-5-5  cache ● 47m/1h  hit 98%
 ```
 
 The panel's labels are in Italian (`Disco` = disk, `up 8g` = up 8 days,
@@ -88,6 +90,7 @@ percentage.
 | GPU | `nvidia-smi` if present (usage bar, memory, temperature), otherwise `vcgencmd` (V3D clock, GPU memory) |
 | Throttling | `vcgencmd get_throttled` (Raspberry Pi only) |
 | Uptime | `/proc/uptime` |
+| Model and cache (below the animated line) | the main conversation's last request: model, time left on the prompt cache (5m or 1h from the last request), share of input tokens read from cache. Before the first request it shows the `/model` model and `cache —` |
 
 It works on Linux (WSL included). Items the machine does not have, for
 example the GPU without `nvidia-smi` or `vcgencmd`, simply do not appear.

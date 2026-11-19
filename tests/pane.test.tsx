@@ -74,3 +74,28 @@ for (const w of [34, 48, 106]) {
     await ui.unmount()
   })
 }
+
+for (const [nome, llm, atteso] of [
+  ['senza richieste', null, /opus-5-5  cache —/],
+  ['cache 1h ancora valida', { model: 'claude-opus-5-5', at: 1 - 13 * 60_000, ttl: '1h', input: 10, read: 980, write: 10 }, /opus-5-5  cache ● 47m\/1h  hit 98%/],
+  ['cache 5m scaduta', { model: 'claude-sonnet-5-5', at: 1 - 6 * 60_000, ttl: '5m', input: 10, read: 0, write: 990 }, /sonnet-5-5  cache ✗ scaduta  hit 0%/],
+] as const) {
+  test(`riga modello e cache: ${nome}`, async ($, on) => {
+    on('command.register', () => ({ value: { command: 'stato' } }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.every', () => ({ value: { cancel: () => {} } } as any))
+    on('clock.now', () => ({ value: 1 }))
+    on('session.model', () => ({ value: 'claude-opus-5-5' }))
+    on('state.get', ($, e: any, next: any) =>
+      e.key === 'llm' && llm ? { value: { value: { shape: 'llm-1', value: llm }, version: 1 } } : next(e))
+    on('fs.read', (_, e: any) => ({ value: FILES[e.path] ?? '' }))
+    on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } } as any))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const txt = flat(await ui.drawn())
+    ;(globalThis as any).console.log(txt.split('\n').slice(-2).join('\n'))
+    expect(txt).toMatch(atteso)
+    await ui.unmount()
+  })
+}

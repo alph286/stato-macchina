@@ -20,6 +20,8 @@ Disco ████████████████░░░░░░░░�
 GPU   V3D 500 MHz · mem 76M
 Temp  █████████████████░░░░░░░░░░░ 62°C
       ✓ nessun throttling
+──────────━━━━━━━◆─────────────────
+opus-5-5  cache ● 47m/1h  hit 98%
 ```
 
 ## Perché nasce
@@ -85,6 +87,7 @@ percentuale.
 | GPU | `nvidia-smi` se c'è (barra d'uso, memoria, temperatura), altrimenti `vcgencmd` (frequenza V3D, memoria GPU) |
 | Throttling | `vcgencmd get_throttled` (solo Raspberry Pi) |
 | Uptime | `/proc/uptime` |
+| Modello e cache (sotto la riga animata) | l'ultima richiesta della conversazione principale: modello, tempo che resta alla cache del prompt (5m o 1h dall'ultima richiesta), quota di token in ingresso letti dalla cache. Prima della prima richiesta mostra il modello di `/model` e `cache —` |
 
 Funziona su Linux (anche WSL). Le voci che la macchina non ha, per esempio
 la GPU senza `nvidia-smi` né `vcgencmd`, semplicemente non compaiono.

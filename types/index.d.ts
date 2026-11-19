@@ -18,8 +18,18 @@ export type Snapshot = {
   at: number
 }
 
+/** Ultima richiesta del thread principale: modello e uso della cache. */
+export type Llm = {
+  model: string
+  at: number
+  ttl: '5m' | '1h' | null
+  input: number
+  read: number
+  write: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'stato-macchina': { snap: Shaped<Snapshot | null> }
+    'stato-macchina': { snap: Shaped<Snapshot | null>; llm: Shaped<Llm | null> }
   }
 }

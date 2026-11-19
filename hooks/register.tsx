@@ -1,11 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Snapshot } from '../types'
+import type { Llm, Snapshot } from '../types'
 
 const PANE = 'stato-macchina'
 const snap = atom({ plugin: 'stato-macchina', key: 'snap' } as const, null, {
   shape: 'snap-1',
+})
+
+const llm = atom({ plugin: 'stato-macchina', key: 'llm' } as const, null as Llm | null, {
+  shape: 'llm-1',
 })
 
 const GiB = 1024 ** 3
@@ -18,6 +22,53 @@ let hist: number[] = []
 let hasVc: boolean | null = null
 let hasNv: boolean | null = null
 let host = ''
+
+// Divisore animato: una cometa che scorre su una riga di celle (Raster),
+// ridipinta con $.ui.blit senza ridisegnare il pannello.
+const DIV_KEY = 'divisore'
+let divCols = 0
+let divT = 0
+const BASE = 0x3a3a3a
+const HEAD = 0xffd2b0
+const TAIL = 0xd97757
+const lerp = (a: number, b: number, k: number) => {
+  const c = (sh: number) => Math.round(((a >> sh) & 255) * (1 - k) + ((b >> sh) & 255) * k) << sh
+  return c(16) | c(8) | c(0)
+}
+function divFrame(cols: number, t: number): string {
+  const w = new Uint32Array(cols * 3)
+  const len = Math.max(4, Math.round(cols / 3))
+  const span = cols + len
+  const head = t % span
+  for (let x = 0; x < cols; x++) {
+    const d = head - x // distanza dalla testa, verso la coda
+    let ch = 0x2500 // ─
+    let fg = BASE
+    if (d >= 0 && d < len) {
+      const k = 1 - d / len
+      ch = d === 0 ? 0x25c6 /* ◆ */ : 0x2501 // ━
+      fg = d === 0 ? HEAD : lerp(BASE, TAIL, k * k)
+    }
+    w[x * 3] = ch
+    w[x * 3 + 1] = fg
+    w[x * 3 + 2] = 0x01000000
+  }
+  return b64(new Uint8Array(w.buffer))
+}
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+function b64(b: Uint8Array): string {
+  let o = ''
+  for (let i = 0; i < b.length; i += 3) {
+    const n = ((b[i] ?? 0) << 16) | ((b[i + 1] ?? 0) << 8) | (b[i + 2] ?? 0)
+    o += B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]!
+      + (i + 1 < b.length ? B64[(n >> 6) & 63]! : '=') + (i + 2 < b.length ? B64[n & 63]! : '=')
+  }
+  return o
+}
+
+// "claude-opus-5-5" -> "opus-5-5"; toglie anche il suffisso data.
+const shortModel = (m: string) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/\[.*\]$/, '')
+const fmtLeft = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m` : `${Math.ceil(ms / 1000)}s`)
 
 async function run($: EngineInterface, argv: string[]): Promise<string | null> {
   try {
@@ -109,6 +160,11 @@ export const register: Register = on => {
     await $.command.register({ name: 'stato', description: 'Mostra il pannello stato macchina (CPU, GPU, RAM, disco)' })
     void sample($)
     $.clock.every(2000, () => sample($))
+    $.clock.every(70, () => {
+      if (divCols <= 0) return
+      divT++
+      void $.ui.blit({ requestId: PANE, key: DIV_KEY, cells: divFrame(divCols, divT), columns: divCols, rows: 1 })
+    })
     void $.ui.open({ id: PANE, title: 'Stato', columns: 34 })
     return next(e)
   })
@@ -116,6 +172,24 @@ export const register: Register = on => {
   on('command.run', { command: 'stato' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Stato', columns: 34 })
     return { text: 'Pannello stato aperto.' }
+  })
+
+  // Ogni richiesta del thread principale: modello e token della cache.
+  on('turn.step', async function* ($, e, next) {
+    const at = await $.clock.now()
+    const r = yield* next(e)
+    const u = r?.usage
+    if (!e.agentId && u) {
+      const ttl: Llm['ttl'] = (u.ephemeral_1h_input_tokens ?? 0) > 0 ? '1h'
+        : (u.ephemeral_5m_input_tokens ?? 0) > 0 ? '5m' : null
+      await update($, llm, prev => ({
+        model: u.model || e.model, at,
+        // Una lettura rinnova la cache con la durata dell'ultima scrittura.
+        ttl: ttl ?? prev?.ttl ?? null,
+        input: u.input_tokens, read: u.cache_read_input_tokens, write: u.cache_creation_input_tokens,
+      }))
+    }
+    return r
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -144,6 +218,29 @@ export const register: Register = on => {
     const spark = s.cpuHist.slice(-barW).map(v => SPARK[Math.min(7, Math.floor((v / 100) * 8))]).join('')
     const tp = s.tempC ?? 0
     const thOk = !s.throttled || s.throttled === '0x0'
+
+    // Riga modello + cache
+    const L = await read($, llm)
+    let model = L?.model
+    if (!model) {
+      try { model = await $.session.model() } catch { model = '?' }
+    }
+    model = shortModel(model)
+    let cacheTxt = '—'
+    let cacheCol: 'success' | 'warning' | 'error' | undefined
+    let hit = ''
+    if (L) {
+      const tot = L.input + L.read + L.write
+      if (tot > 0) hit = `hit ${Math.round((100 * L.read) / tot)}%`
+      if (L.ttl) {
+        const ttlMs = L.ttl === '1h' ? 3_600_000 : 300_000
+        const left = L.at + ttlMs - s.at
+        if (left <= 0) { cacheTxt = '✗ scaduta'; cacheCol = 'error' }
+        else { cacheTxt = `● ${fmtLeft(left)}/${L.ttl}`; cacheCol = left / ttlMs > 0.25 ? 'success' : 'warning' }
+      } else if (tot > 0) cacheTxt = L.read > 0 ? '● letta' : '○ nessuna'
+    }
+    const terminal = e.surface === 'terminal'
+    if (terminal) divCols = cols
     return (
       <Box flexDirection="column">
         <Text bold color="claude">{s.host}  <Text dimColor>up {s.uptime}</Text></Text>
@@ -159,6 +256,15 @@ export const register: Register = on => {
         {s.throttled && (
           <Text color={thOk ? 'success' : 'error'}>{thOk ? '      ✓ nessun throttling' : `      ✗ throttled ${s.throttled}`}</Text>
         )}
+        {e.surface === 'terminal'
+          ? h($.ui.resolve(e).Raster, { key: DIV_KEY, columns: cols, rows: 1, cells: divFrame(cols, divT) })
+          : <Text dimColor>{'─'.repeat(cols)}</Text>}
+        <Text wrap="truncate">
+          <Text bold color="claude">{model}</Text>
+          <Text dimColor>  cache </Text>
+          <Text color={cacheCol} dimColor={!cacheCol}>{cacheTxt}</Text>
+          {hit && <Text dimColor>  {hit}</Text>}
+        </Text>
       </Box>
     )
   })
