@@ -1,0 +1,76 @@
+import { expect, test } from 'claude-code/testing'
+
+const PANE = {
+  plugin: 'stato-macchina',
+  component: 'Pane',
+  requestId: 'stato-macchina',
+  props: { title: 'Stato', isFocused: false, bodyColumns: 34, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+} as const
+
+const FILES: Record<string, string> = {
+  '/etc/hostname': 'raspberrypi\n',
+  '/proc/stat': 'cpu  100 0 100 800 0 0 0 0 0 0\ncpu0 1 0 1 8 0 0 0 0\ncpu1 1 0 1 8 0 0 0 0\n',
+  '/proc/meminfo': 'MemTotal: 4000000 kB\nMemAvailable: 2000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1900000 kB\n',
+  '/sys/class/thermal/thermal_zone0/temp': '62300\n',
+  '/proc/loadavg': '1.8 1.1 0.6 3/268 1\n',
+  '/proc/uptime': '720000.5 1\n',
+}
+
+test('il pannello mostra host, RAM, disco, GPU e temperatura', async ($, on) => {
+  on('command.register', () => ({ value: { command: 'stato' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.every', () => ({ value: { cancel: () => {} } } as any))
+  on('clock.now', () => ({ value: 1 }))
+  on('fs.read', (_, e: any) => ({ value: FILES[e.path] ?? '' }))
+  on('process.run', (_, e: any) => {
+    const a = e.argv.join(' ')
+    const out = a.startsWith('df') ? '  size used\n 30000000000 15000000000\n'
+      : a.includes('measure_clock') ? 'frequency(46)=500000992\n'
+      : a.includes('get_mem') ? 'gpu=76M\n'
+      : a.includes('get_throttled') ? 'throttled=0x0\n' : null
+    return { value: out === null ? { exitCode: 1, stdout: '', stderr: '' } : { exitCode: 0, stdout: out, stderr: '' } } as any
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'stato', args: '' } as any)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /raspberrypi/ }))).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /1\.9\/3\.8 GiB/ }))).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /V3D 500 MHz/ }))).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /62°C/ }))).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /nessun throttling/ }))).toBeTruthy()
+  await ui.unmount()
+})
+
+// Simulazione testuale: righe del pannello a diverse larghezze.
+function flat(n: any): string {
+  if (n == null || n === false) return ''
+  if (typeof n === 'string' || typeof n === 'number') return String(n)
+  if (Array.isArray(n)) return n.map(flat).join('')
+  const kids = n.props?.children ?? n.children
+  if (n.type === 'Box' && n.props?.flexDirection === 'column')
+    return (Array.isArray(kids) ? kids : [kids]).map(flat).filter((x: string) => x !== '').join('\n')
+  return flat(kids)
+}
+for (const w of [34, 48, 106]) {
+  test(`simula a ${w} colonne`, async ($, on) => {
+    on('command.register', () => ({ value: { command: 'stato' } }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.every', () => ({ value: { cancel: () => {} } } as any))
+    on('clock.now', () => ({ value: 1 }))
+    on('fs.read', (_, e: any) => ({ value: FILES[e.path] ?? '' }))
+    on('process.run', (_, e: any) => {
+      const a = e.argv.join(' ')
+      const out = a.startsWith('df') ? '  size used\n 30000000000 15000000000\n' : a.includes('measure_clock') ? 'frequency(46)=500000992\n' : a.includes('get_mem') ? 'gpu=76M\n' : a.includes('get_throttled') ? 'throttled=0x0\n' : null
+      return { value: out === null ? { exitCode: 1, stdout: '', stderr: '' } : { exitCode: 0, stdout: out, stderr: '' } } as any
+    })
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: w }, surface: 'terminal', viewport: { columns: w + 4, rows: 40 } } as any)
+    const txt = flat(await ui.drawn())
+    ;(globalThis as any).console.log(`\n=== ${w} colonne ===\n` + txt)
+    for (const line of txt.split('\n')) expect(line.length <= w).toBe(true)
+    await ui.unmount()
+  })
+}

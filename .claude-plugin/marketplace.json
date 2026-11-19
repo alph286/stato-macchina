@@ -1,0 +1,5 @@
+{
+  "name": "stato-macchina",
+  "owner": { "name": "alph286" },
+  "plugins": [{ "name": "stato-macchina", "source": "./" }]
+}
