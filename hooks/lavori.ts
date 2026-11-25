@@ -16,10 +16,11 @@ const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][A-Z
 export function parseProgress(tail: string): Progress {
   const clean = tail.replace(ANSI, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
   let exit: number | null = null
-  const ex = /\[exited with code (-?\d+)\]\s*$/.exec(clean)
+  // "[exited with code N]" alla fine; "[killed]" quando il task è stato fermato.
+  const ex = /\[(?:exited with code (-?\d+)|killed)\]\s*$/.exec(clean)
   let body = clean
   if (ex) {
-    exit = Number(ex[1])
+    exit = ex[1] !== undefined ? Number(ex[1]) : 137
     body = clean.slice(0, ex.index)
   }
   // Ogni \r riscrive la riga: conta solo l'ultimo pezzo di ciascuna riga.
@@ -83,9 +84,15 @@ export function isDetached(cmd: string): boolean {
  */
 export function scanFiles(cmd: string, cwd: string, home: string): { logs: string[]; downloads: string[] } {
   cmd = cmd.replace(/(^|[;&|\n]\s*)(?:\S*\/)?traccia\b[^;&|\n]*/g, '$1')
-  let base = cwd
-  const cd = /^\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(&&|;)/.exec(cmd)
-  if (cd) base = resolve(unq(cd[1]!), cwd, home) ?? cwd
+  cmd = expandVars(cmd, home)
+  // Ogni `cd X` vale per quello che viene dopo: la base di un file è l'ultimo cd prima di lui.
+  const cds: { at: number; dir: string }[] = []
+  let dir = cwd
+  for (const m of cmd.matchAll(/(?:^|[;&|\n(]\s*)cd\s+("[^"]+"|'[^']+'|[^\s;&|)]+)/g)) {
+    dir = resolve(unq(m[1]!), dir, home) ?? dir
+    cds.push({ at: m.index! + m[0].length, dir })
+  }
+  const baseAt = (i: number) => cds.filter(c => c.at <= i).at(-1)?.dir ?? cwd
   const tok = `("[^"]+"|'[^']+'|[^\\s;&|<>()]+)`
   const logPats = [
     new RegExp(`(?:^|[^<>&0-9])(?:[12]|&)?>>?\\s*${tok}`, 'g'), // > f, >> f, 2> f, &> f
@@ -105,7 +112,7 @@ export function scanFiles(cmd: string, cwd: string, home: string): { logs: strin
       for (const m of cmd.matchAll(re)) {
         const raw = unq(m[1]!)
         if (/^&|^\/dev\/|^-$|[$*?`]/.test(raw) || raw === '') continue
-        const p = resolve(raw, base, home)
+        const p = resolve(raw, baseAt(m.index!), home)
         if (p && !seen.includes(p)) { seen.push(p); found.push(p) }
       }
     return found
@@ -118,6 +125,22 @@ export function scanFiles(cmd: string, cwd: string, home: string): { logs: strin
 export function detectFiles(cmd: string, cwd: string, home: string): string[] {
   const { logs, downloads } = scanFiles(cmd, cwd, home)
   return [...logs, ...downloads]
+}
+
+/** Sostituisce $VAR e ${VAR} assegnate nel comando stesso (VAR=valore) e $HOME. */
+function expandVars(cmd: string, home: string): string {
+  const vars = new Map<string, string>([['HOME', home]])
+  let out = ''
+  let last = 0
+  // Si scorre in ordine: un'assegnazione vale per il testo che la segue.
+  const re = /(?:^|[;&|\n]\s*)(?:export\s+)?([A-Za-z_]\w*)=("[^"]*"|'[^']*'|[^\s;&|]*)/g
+  const sub = (t: string) => t.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (all, n: string) => vars.get(n) ?? all)
+  for (const m of cmd.matchAll(re)) {
+    out += sub(cmd.slice(last, m.index! + m[0].length))
+    last = m.index! + m[0].length
+    vars.set(m[1]!, sub(unq(m[2]!)))
+  }
+  return out + sub(cmd.slice(last))
 }
 
 const unq = (s: string) => s.replace(/^(["'])(.*)\1$/, '$2')

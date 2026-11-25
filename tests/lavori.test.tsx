@@ -41,6 +41,7 @@ test('esito, \\r e codici ANSI', () => {
   expect(p.text).toBe('fine')
   expect(p.pct).toBe(90)
   expect(parseProgress('boom\n[exited with code 127]\n').exit).toBe(127)
+  expect(parseProgress('\n[killed]\n').exit).toBe(137)
   expect(parseProgress('\r33%\r66%').text).toBe('66%')
 })
 
@@ -65,6 +66,11 @@ test('file di log e download nel comando', () => {
   expect(scanFiles('nohup wget -O a.dat https://x/a > w.log 2>&1 &', cwd, home)).toEqual({ logs: ['/p/w.log'], downloads: ['/p/a.dat'] })
   expect(scanFiles('wget -o w.log https://x/a', cwd, home)).toEqual({ logs: ['/p/w.log'], downloads: [] })
   expect(scanFiles('curl -L -o b.iso https://x/b', cwd, home)).toEqual({ logs: [], downloads: ['/p/b.iso'] })
+  // variabili assegnate nel comando e cd in mezzo
+  expect(scanFiles('S=/t/prova; cd $S && rm -f *.dat && nohup wget -O w.dat https://x > w.log 2>&1 &\nS=/q; ./x.sh > ${S}/b.log', cwd, home))
+    .toEqual({ logs: ['/t/prova/w.log', '/q/b.log'], downloads: ['/t/prova/w.dat'] })
+  expect(detectFiles('make > a.log; cd sub && make > b.log', cwd, home)).toEqual(['/p/a.log', '/p/sub/b.log'])
+  expect(detectFiles('cmd > $UNKNOWN/x.log', cwd, home)).toEqual([])
   expect(detectFiles('curl -L --output "/tmp/a b.bin" https://x', cwd, home)).toEqual(['/tmp/a b.bin'])
   expect(detectFiles('python train.py --log-file=runs/r1.log', cwd, home)).toEqual(['/p/runs/r1.log'])
   expect(detectFiles('cmd > /dev/null 2>&1', cwd, home)).toEqual([])
