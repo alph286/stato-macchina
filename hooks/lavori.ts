@@ -170,10 +170,11 @@ function resolve(p: string, cwd: string, home: string): string | null {
 
 /** "Command running in background with ID: x. Output is being written to: /p/x.output" */
 export function bgFromText(text: string): { id: string; path: string | null } | null {
-  // Solo la prima riga: è lì che Claude Code scrive l'avviso. Più in basso è
-  // output del comando (un grep o un cat che stampa questa stessa frase).
+  // Solo un testo che inizia con l'avviso di Claude Code («Command running in
+  // background…», «Command was manually backgrounded…»): altrimenti è output
+  // del comando (un grep o un cat che stampa questa stessa frase).
   const first = text.trimStart().split('\n')[0] ?? ''
-  if (!/background/i.test(first)) return null
+  if (!/^Command\b.*\bbackground/i.test(first)) return null
   const id = /with ID:\s*([A-Za-z0-9_-]+)/.exec(first)?.[1]
   if (!id) return null
   const path = /written to:\s*(\S+?\.output)/.exec(first)?.[1] ?? null

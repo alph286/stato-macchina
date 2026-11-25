@@ -235,9 +235,11 @@ function onToolResult(use: { tool: string; input: Record<string, unknown> }, tex
     const cmd = String(inp.command ?? '')
     const name = String(inp.description ?? '') || cmd.slice(0, 60)
     const { logs: files, downloads } = scanFiles(cmd, cwd, home)
+    // Il risultato strutturato decide (backgroundTaskId); il testo serve solo se manca.
+    const structured = 'stdout' in r || 'backgroundTaskId' in r
     const bg = typeof r.backgroundTaskId === 'string'
       ? { id: r.backgroundTaskId, path: bgFromText(text)?.path ?? null }
-      : bgFromText(text)
+      : structured ? null : bgFromText(text)
     if (bg) {
       if (bg.path) tasksDir = bg.path.replace(/\/[^/]+$/, '')
       const path = bg.path ?? (tasksDir ? `${tasksDir}/${bg.id}.output` : null)
