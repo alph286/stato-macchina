@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# traccia: fa comparire un file di log (o un file che cresce) nel pannello
+# «Stato» di stato-macchina, sezione Lavori, per la sessione di Claude Code
+# da cui è lanciato.
+#
+#   traccia <file> ["descrizione"]   segue il file
+#   traccia --fine <file>            lo segna come finito
+#   traccia --elenco                 mostra cosa è registrato in questa sessione
+set -euo pipefail
+
+sid="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -z "$sid" ]]; then
+  echo "traccia: CLAUDE_CODE_SESSION_ID non impostato (va lanciato da Claude Code)" >&2
+  exit 1
+fi
+dir="${XDG_STATE_HOME:-$HOME/.local/state}/stato-macchina/traccia"
+reg="$dir/$sid.tsv"
+mkdir -p "$dir"
+
+uso() { sed -n '2,9s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+
+case "${1:-}" in
+  ''|-h|--help) uso ;;
+  --elenco) [[ -f "$reg" ]] && cat "$reg"; exit 0 ;;
+  --fine)
+    [[ -n "${2:-}" ]] || uso
+    printf '%s\tfine\t%s\t\n' "$(date +%s)" "$(realpath -m -- "$2")" >>"$reg"
+    exit 0 ;;
+esac
+
+file="$(realpath -m -- "$1")"
+desc="${2:-$(basename -- "$file")}"
+desc="${desc//$'\t'/ }"
+printf '%s\tsegui\t%s\t%s\n' "$(date +%s)" "$file" "$desc" >>"$reg"
+echo "traccia: $file compare nel pannello Stato come «$desc»"

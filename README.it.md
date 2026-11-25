@@ -4,7 +4,8 @@
 
 Una mod per [Claude Code](https://claude.com/claude-code) che apre un pannello
 con lo stato della macchina su cui gira Claude Code: CPU, GPU, RAM, swap,
-disco e temperatura. Si aggiorna ogni 2 secondi.
+disco e temperatura, e sotto l'avanzamento dei lavori che Claude lancia in
+background (download, compilazioni, agenti). Si aggiorna ogni 2 secondi.
 
 ```
 raspberrypi  up 8g 6h 29m
@@ -22,6 +23,16 @@ Temp  █████████████████░░░░░░░�
       ✓ nessun throttling
 ──────────━━━━━━━◆─────────────────
 opus-5-5  cache ● 47m/1h  hit 98%
+...
+─────────────━━━━━━━◆──────────────
+Lavori  2 in corso
+● Scarica modello Wan 14B   1m 10s
+      ████████████░░░░░░░░░░░  54%
+  8.0M/s
+⚠ build lab                 6m 40s
+  Compiling foo v0.1
+  39K · fermo da 3m 00s
+✓ pip install torch            42s
 ```
 
 ## Perché nasce
@@ -95,6 +106,45 @@ percentuale.
 | Costo (`Costo`) | il costo della sessione in dollari, come lo totalizza `/cost` (`$.session.usage().cost`), richieste dei subagenti e delle mod comprese. È una stima, non la bolletta: con l'abbonamento non è un addebito. Riparte da zero con `/clear` |
 | Contesto (`Ctx`) | token in ingresso dell'ultima risposta, come nella status line (`$.session.usage()`). La barra va da 0 a 200k, la soglia a cui faccio `/clear` o `/compact` (o alla finestra del modello se è più piccola); a destra i token usati, sotto la finestra intera del modello. Subito dopo `/clear` o `/compact` mostra `—` fino alla risposta successiva. La soglia è `CTX_LIMIT` in `hooks/register.tsx` |
 | Limiti d'uso (`5h`, `7g`) | le finestre di 5 ore e 7 giorni dell'abbonamento, con il tempo che manca al reset; non compaiono senza abbonamento o prima della prima risposta |
+| Lavori (sotto la seconda riga animata, azzurra, che si muove solo mentre un lavoro è in corso) | vedi sotto |
+
+### Lavori in background
+
+Ogni lavoro ha una riga con lo stato (`●` in corso, `⚠` log fermo da più di
+un minuto, `✓` finito, `✗` uscito con errore) e la durata. Sotto ci sono la
+barra, se il log stampa una percentuale, e l'ultima riga del log oppure la
+dimensione del file e la velocità con cui cresce. Un lavoro finito resta
+visibile 2 minuti. Se i lavori sono più di 6, compare `+N altri`.
+
+Da dove vengono:
+
+- **Comandi Bash in background** (`run_in_background`, Ctrl+B, timeout) e
+  **Monitor**: dalla cronologia della sessione (`$.session.messages`), che
+  dà la descrizione del comando e il file di output del task in
+  `<tmp>/claude-<uid>/<progetto>/<sessione>/tasks/`. L'esito viene dalla riga
+  `[exited with code N]` con cui finisce quel file. Se il comando manda tutto
+  in un suo log (`cmd > x.log 2>&1`), il pannello legge quel log.
+- **Rete di sicurezza**: un file `.output` di quella cartella che cresce e che
+  la cronologia non ha ancora nominato compare comunque, come `comando <id>`.
+- **Comandi staccati** (`nohup`, `setsid`, `&` finale, `screen -dm`,
+  `tmux new -d`): una riga per comando, che segue il log (`>`, `>>`, `tee`,
+  `--log`, `wget -o`) o, se non c'è, il file scaricato (`curl -o/-O`,
+  `wget -O`: solo dimensione e velocità). Le chiamate a `traccia` nello stesso
+  comando non nascondono il resto. Sparisce dopo 15 minuti senza scritture.
+- **`traccia`**: ogni altro file, con `traccia <file> "descrizione"` (e
+  `traccia --fine <file>` alla fine). Lo script è in `bin/` della mod, quindi
+  è nel `PATH` dei comandi di Claude; scrive in
+  `~/.local/state/stato-macchina/traccia/<sessione>.tsv`.
+- **Agenti**: `$.agent.list()`, con la loro ultima frase di avanzamento.
+
+La mod aggiunge al prompt di sistema una breve istruzione che dice a Claude
+di usare `traccia` per i log che il pannello non vede da solo e di preferire
+opzioni che stampano l'avanzamento (`curl --progress-bar`,
+`wget --progress=dot:mega`, `rsync --info=progress2`).
+
+La percentuale si legge da `NN%` (curl `--progress-bar`, wget, rsync, pip,
+git, apt), dal misuratore di default di curl, da tqdm (`45/100 [`), da
+`3 of 12` / `3 di 12` e da `to-chk=` di rsync.
 
 Funziona su Linux (anche WSL). Le voci che la macchina non ha, per esempio
 la GPU senza `nvidia-smi` né `vcgencmd`, semplicemente non compaiono.
@@ -107,7 +157,9 @@ claude plugin test .
 ```
 
 I test simulano i dati e disegnano il pannello a 34, 48 e 106 colonne,
-controllando che nessuna riga superi la larghezza del pannello.
+controllando che nessuna riga superi la larghezza del pannello. I test dei
+lavori (`tests/lavori.test.tsx`) leggono l'avanzamento da output veri di curl,
+wget, rsync e git (`tests/campioni.ts`).
 
 ## Licenza
 

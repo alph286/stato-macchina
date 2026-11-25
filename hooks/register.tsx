@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Llm, Snapshot } from '../types'
+import type { Job, Llm, Snapshot } from '../types'
+import { bgFromText, fmtB, fmtDur, isDetached, parseProgress, scanFiles } from './lavori'
 
 const PANE = 'stato-macchina'
 const snap = atom({ plugin: 'stato-macchina', key: 'snap' } as const, null, {
@@ -10,6 +11,10 @@ const snap = atom({ plugin: 'stato-macchina', key: 'snap' } as const, null, {
 
 const llm = atom({ plugin: 'stato-macchina', key: 'llm' } as const, null as Llm | null, {
   shape: 'llm-1',
+})
+
+const jobs = atom({ plugin: 'stato-macchina', key: 'jobs' } as const, [] as Job[], {
+  shape: 'jobs-1',
 })
 
 const GiB = 1024 ** 3
@@ -29,13 +34,18 @@ const DIV_KEY = 'divisore'
 let divCols = 0
 let divT = 0
 const BASE = 0x3a3a3a
-const HEAD = 0xffd2b0
-const TAIL = 0xd97757
+// Prima cometa: testa 0xffd2b0, coda 0xd97757 (i valori di default di divFrame).
+// Seconda cometa, sopra i lavori in background: azzurra, si muove solo se c'è un lavoro in corso.
+const DIV2_KEY = 'divisore-lavori'
+const HEAD2 = 0xc8e0ff
+const TAIL2 = 0x5f87d7
+let div2T = 0
+let jobsRunning = false
 const lerp = (a: number, b: number, k: number) => {
   const c = (sh: number) => Math.round(((a >> sh) & 255) * (1 - k) + ((b >> sh) & 255) * k) << sh
   return c(16) | c(8) | c(0)
 }
-function divFrame(cols: number, t: number): string {
+function divFrame(cols: number, t: number, HEAD = 0xffd2b0, TAIL = 0xd97757): string {
   const w = new Uint32Array(cols * 3)
   const len = Math.max(4, Math.round(cols / 3))
   const span = cols + len
@@ -176,19 +186,297 @@ async function sample($: EngineInterface): Promise<void> {
   await update($, snap, () => s)
 }
 
+// ── Lavori in background ────────────────────────────────────────────────
+// Fonti: (1) la cronologia della sessione, per i comandi Bash in background
+// (anche Ctrl+B o timeout), i Monitor e i file di log dei comandi staccati;
+// (2) la cartella tasks/ della sessione, come rete di sicurezza; (3) il
+// registro di `traccia`; (4) $.agent.list() per gli agenti.
+
+type Tracked = {
+  kind: Job['kind']
+  name: string
+  path: string | null
+  startedAt: number
+  /** File di log trovati nel comando: letti se l'output del task resta vuoto. */
+  files: string[]
+  /** File scaricati dal comando: seguiti (solo dimensione) se nessun log esiste. */
+  downloads?: string[]
+  /** File seguito senza un task che dica quando finisce (nohup, traccia). */
+  detached: boolean
+  seen: boolean
+}
+const tracked = new Map<string, Tracked>()
+const toolUses = new Map<string, { tool: string; input: Record<string, unknown> }>()
+const prevSize = new Map<string, { size: number; at: number }>()
+let lastUuid: string | undefined
+let tasksDir: string | null = null
+let sid = ''
+let home = ''
+let cwd = ''
+let traccePath = ''
+let scanning = false
+const DONE_KEEP = 120_000 // un lavoro finito resta visibile 2 minuti
+const STALL = 60_000 // un log fermo da 1 minuto diventa giallo
+const DETACHED_DROP = 15 * 60_000 // un file staccato fermo da 15 minuti sparisce
+
+function track(id: string, t: Omit<Tracked, 'seen'>) {
+  if (!tracked.has(id)) tracked.set(id, { ...t, seen: false })
+}
+
+function onToolResult(use: { tool: string; input: Record<string, unknown> }, text: string, result: unknown, at: number) {
+  const r = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>
+  const inp = use.input
+  if (use.tool === 'Bash') {
+    const cmd = String(inp.command ?? '')
+    const name = String(inp.description ?? '') || cmd.slice(0, 60)
+    const { logs: files, downloads } = scanFiles(cmd, cwd, home)
+    const bg = typeof r.backgroundTaskId === 'string'
+      ? { id: r.backgroundTaskId, path: bgFromText(text)?.path ?? null }
+      : bgFromText(text)
+    if (bg) {
+      if (bg.path) tasksDir = bg.path.replace(/\/[^/]+$/, '')
+      const path = bg.path ?? (tasksDir ? `${tasksDir}/${bg.id}.output` : null)
+      track(bg.id, { kind: 'bash', name, path, startedAt: at, files, downloads, detached: false })
+    } else if (isDetached(cmd)) {
+      // Una riga per comando: si segue il primo log, gli altri file fanno da riserva.
+      const [first, ...rest] = [...files, ...downloads]
+      if (first) track(`file:${first}`, {
+        kind: 'file', name, path: first, startedAt: at,
+        files: rest.filter(f => files.includes(f)), downloads: rest.filter(f => downloads.includes(f)), detached: true,
+      })
+    }
+  } else if (use.tool === 'Monitor') {
+    const id = typeof r.taskId === 'string' ? r.taskId : /task(?:\s+ID)?[:\s]+([A-Za-z0-9_-]+)/i.exec(text)?.[1]
+    if (id) track(id, {
+      kind: 'monitor', name: String(inp.description ?? 'Monitor'),
+      path: tasksDir ? `${tasksDir}/${id}.output` : null, startedAt: at, files: [], detached: false,
+    })
+  }
+}
+
+async function readMessages($: EngineInterface, now: number) {
+  let fresh: Awaited<ReturnType<typeof $.session.messages>>
+  try {
+    fresh = await $.session.messages(lastUuid ? { after: lastUuid } : { last: 400 })
+  } catch { return }
+  if ('deny' in fresh) { lastUuid = undefined; return }
+  for (const m of fresh) {
+    for (const u of m.toolUses ?? []) {
+      toolUses.set(u.tool_use_id, { tool: u.tool, input: u.input })
+      if (u.text !== undefined && !u.isError) onToolResult(u, u.text, u.result, now)
+    }
+    for (const r of m.toolResults ?? []) {
+      const u = toolUses.get(r.tool_use_id)
+      if (u && !r.isError) onToolResult(u, r.text ?? '', r.result, now)
+    }
+    if (m.uuid) lastUuid = m.uuid
+  }
+}
+
+async function readTracce($: EngineInterface, now: number) {
+  const txt = await readText($, traccePath)
+  if (!txt) return
+  for (const line of txt.split('\n')) {
+    const [ts, op, path, ...rest] = line.split('\t')
+    if (!path) continue
+    const id = `file:${path}`
+    if (op === 'fine') {
+      const t = tracked.get(id)
+      if (t) t.detached = false, (t as Tracked & { ended?: number }).ended = Number(ts) * 1000 || now
+      continue
+    }
+    track(id, {
+      kind: 'file', name: rest.join('\t') || path.replace(/^.*\//, ''), path,
+      startedAt: Number(ts) * 1000 || now, files: [], detached: true,
+    })
+  }
+}
+
+async function statOf($: EngineInterface, p: string) {
+  try {
+    const s = await $.fs.stat(p)
+    return s.kind === 'file' ? s : null
+  } catch { return null }
+}
+
+async function tailOf($: EngineInterface, p: string, size: number): Promise<string> {
+  const offset = Math.max(0, size - 4096)
+  try {
+    return String(await $.fs.read(p, { offset, length: size - offset }))
+  } catch { return '' }
+}
+
+// Un download binario non ha righe da mostrare: basta dimensione e velocità.
+const isBinary = (s: string) => {
+  if (!s) return false
+  let bad = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c === 0xfffd || (c < 32 && c !== 9 && c !== 10 && c !== 13 && c !== 27)) bad++
+  }
+  return bad / s.length > 0.1
+}
+
+async function scanJobs($: EngineInterface): Promise<void> {
+  if (scanning) return
+  scanning = true
+  try {
+    const now = await $.clock.now()
+    if (!sid) {
+      sid = (await $.session.id().catch(() => '')) || ''
+      home = (await $.env.get('HOME')) ?? ''
+      cwd = await $.session.cwd().catch(() => '')
+      const state = (await $.env.get('XDG_STATE_HOME')) || `${home}/.local/state`
+      traccePath = `${state}/stato-macchina/traccia/${sid}.tsv`
+      // La cartella tasks/ della sessione: <tmp>/claude-<uid>/<progetto>/<sessione>/tasks
+      const tmp = (await $.env.get('CLAUDE_CODE_TMPDIR')) || '/tmp'
+      const uid = ((await run($, ['id', '-u'])) ?? '').trim()
+      const root = `${tmp}/claude-${uid}`
+      try {
+        for (const d of await $.fs.list(root))
+          if (d.kind === 'dir' && await $.fs.exists(`${root}/${d.name}/${sid}/tasks`)) {
+            tasksDir = `${root}/${d.name}/${sid}/tasks`
+            break
+          }
+      } catch { /* nessuna cartella: si ricava dal primo comando in background */ }
+    }
+    await readMessages($, now)
+    if (traccePath) await readTracce($, now)
+    // Rete di sicurezza: un .output in crescita che la cronologia non ha ancora nominato.
+    if (tasksDir) {
+      try {
+        for (const f of await $.fs.list(tasksDir)) {
+          const id = f.name.replace(/\.output$/, '')
+          if (f.kind !== 'file' || id === f.name || tracked.has(id) || f.size === 0) continue
+          if (now - f.mtimeMs > 10_000) continue
+          track(id, { kind: 'bash', name: `comando ${id}`, path: `${tasksDir}/${id}`.concat('.output'), startedAt: now, files: [], detached: false })
+        }
+      } catch { /* cartella sparita */ }
+    }
+
+    const old = new Map((await read($, jobs)).map(j => [j.id, j]))
+    const out: Job[] = []
+    for (const [id, t] of tracked) {
+      const prev = old.get(id)
+      const startedAt = prev?.startedAt ?? t.startedAt
+      let path = t.path
+      let st = path ? await statOf($, path) : null
+      // Il task non scrive niente (cmd > log 2>&1): segui il suo file di log;
+      // il file scaricato (solo dimensione e velocità) se nessun log esiste.
+      for (const list of [t.files, t.downloads ?? []]) {
+        if (!list.length || (st && st.size > 0)) continue
+        for (const f of list) {
+          const fs = await statOf($, f)
+          if (fs && (!st || st.size === 0 || fs.mtimeMs > (st.mtimeMs ?? 0))) { st = fs; path = f }
+        }
+      }
+      const ended = (t as Tracked & { ended?: number }).ended
+      if (!st) {
+        // File sparito o mai nato.
+        if (prev?.done) { if (now - prev.done.at < DONE_KEEP) out.push(prev); else tracked.delete(id); continue }
+        if (t.seen || ended) {
+          out.push({ ...(prev ?? emptyJob(id, t, startedAt)), done: { code: prev?.done?.code ?? null, at: ended ?? now } })
+          continue
+        }
+        // Mai visto: si aspetta il file fino a 30 s senza mostrarlo (dopo un
+        // ricaricamento la cronologia rinomina anche task finiti da tempo).
+        if (now - t.startedAt > 30_000) tracked.delete(id)
+        else if (prev) out.push(prev)
+        continue
+      }
+      t.seen = true
+      const ps = prevSize.get(path!)
+      const rate = ps && now > ps.at && st.size >= ps.size ? ((st.size - ps.size) * 1000) / (now - ps.at) : prev?.rate ?? 0
+      prevSize.set(path!, { size: st.size, at: now })
+      let pct = prev?.pct ?? null, text = prev?.text ?? '', exit: number | null = null
+      if (!prev || st.size !== prev.size || !ps) {
+        const tail = await tailOf($, path!, st.size)
+        if (isBinary(tail)) { text = ''; pct = null }
+        else ({ pct, text, exit } = parseProgress(tail))
+        // L'esito sta nel file del task, anche quando si legge il log del comando.
+        if (exit === null && path !== t.path && t.path) {
+          const own = await statOf($, t.path)
+          if (own && own.size > 0) exit = parseProgress(await tailOf($, t.path, own.size)).exit
+        }
+      } else if (path !== t.path && t.path) {
+        const own = await statOf($, t.path)
+        if (own && own.size > 0) exit = parseProgress(await tailOf($, t.path, own.size)).exit
+      }
+      const changedAt = Math.max(st.mtimeMs, prev?.changedAt ?? 0)
+      let done = prev?.done ?? null
+      // L'esito si data all'ultima scrittura del file: un task finito da tempo non ricompare.
+      if (!done && exit !== null) done = { code: exit, at: Math.min(now, st.mtimeMs || now) }
+      if (!done && ended) done = { code: null, at: ended }
+      if (done && now - done.at > DONE_KEEP) { tracked.delete(id); continue }
+      if (!done && t.detached && now - changedAt > DETACHED_DROP) { tracked.delete(id); continue }
+      out.push({ id, kind: t.kind, name: t.name, path, pct, text, size: st.size, rate, startedAt, changedAt, done })
+    }
+
+    // Agenti: quelli in corso e quelli finiti da poco.
+    try {
+      for (const a of await $.agent.list()) {
+        const id = `agent:${a.id}`
+        const prev = old.get(id)
+        const running = a.taskStatus === 'running' || a.taskStatus === 'pending'
+        if (!running && !prev) continue
+        let done = prev?.done ?? null
+        if (!running && !done) done = { code: a.taskStatus === 'completed' ? 0 : 1, at: now }
+        if (done && now - done.at > DONE_KEEP) continue
+        const label = a.label && a.label !== a.description ? a.label.trim().split('\n').at(-1)! : ''
+        out.push({
+          id, kind: 'agent', name: a.description || a.type, path: null, pct: null,
+          text: label || `${a.type} · ${Math.round(a.tokenCount / 1000)}k token`,
+          size: 0, rate: 0, startedAt: a.startTime, changedAt: now, done,
+        })
+      }
+    } catch { /* agenti non disponibili */ }
+
+    jobsRunning = out.some(j => !j.done)
+    const same = JSON.stringify(out.map(j => ({ ...j, rate: Math.round(j.rate) }))) ===
+      JSON.stringify([...old.values()].map(j => ({ ...j, rate: Math.round(j.rate) })))
+    if (!same) await update($, jobs, () => out)
+  } finally {
+    scanning = false
+  }
+}
+
+function emptyJob(id: string, t: Tracked, startedAt: number): Job {
+  return { id, kind: t.kind, name: t.name, path: t.path, pct: null, text: '', size: 0, rate: 0, startedAt, changedAt: startedAt, done: null }
+}
+
+const PROMPT_LAVORI = [
+  'Pannello «Stato» (mod stato-macchina): mostra l\'avanzamento dei lavori in background leggendo i loro log.',
+  '- I comandi Bash con run_in_background, i Monitor e gli agenti in background compaiono da soli.',
+  '- Anche i comandi staccati (nohup, setsid, `&` finale, screen/tmux -d) che scrivono con >, >>, tee, -o, --log su un file.',
+  '- Ogni altro log o file che cresce e che vuoi far vedere (log scritto da uno script, file copiato da un altro host, download avviato altrove): registralo con `traccia <file> "descrizione breve"` appena lo crei; `traccia --fine <file>` quando è finito.',
+  '- Per avere una percentuale nel pannello, preferisci opzioni che stampano l\'avanzamento: curl --progress-bar, wget --progress=dot:mega, rsync --info=progress2, pip con la barra di default.',
+].join('\n')
+
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'stato', description: 'Mostra il pannello stato macchina (CPU, GPU, RAM, disco)' })
     void sample($)
     $.clock.every(2000, () => sample($))
+    void scanJobs($).catch(() => {})
+    $.clock.every(2000, () => scanJobs($).catch(() => {}))
     $.clock.every(70, () => {
       if (divCols <= 0) return
       divT++
       void $.ui.blit({ requestId: PANE, key: DIV_KEY, cells: divFrame(divCols, divT), columns: divCols, rows: 1 })
+      if (jobsRunning) {
+        div2T++
+        void $.ui.blit({ requestId: PANE, key: DIV2_KEY, cells: divFrame(divCols, div2T, HEAD2, TAIL2), columns: divCols, rows: 1 })
+      }
     })
     void $.ui.open({ id: PANE, title: 'Stato', columns: 34 })
     return next(e)
+  })
+
+  // Istruzione fissa per Claude: come far comparire i log nel pannello.
+  on('prompt.compose', async ($, e, next) => {
+    const r = await next(e)
+    return { sections: [...r.sections, { id: 'stato-macchina:lavori', text: PROMPT_LAVORI, scope: 'session' as const }] }
   })
 
   on('command.run', { command: 'stato' }, async $ => {
@@ -235,13 +523,13 @@ export const register: Register = on => {
     }
     // Soglie [giallo, rosso] delle barre della macchina; senza soglie la barra sfuma.
     const step = (p: number, [w, c]: Lim) => (p >= c ? 'error' : p >= w ? 'warning' : 'success')
-    const Bar = ({ label, p, info, right, lim }: { label: string; p: number; info?: string; right?: string; lim?: Lim }) => {
+    const Bar = ({ label, p, info, right, lim, col }: { label: string; p: number; info?: string; right?: string; lim?: Lim; col?: string }) => {
       const n = Math.round((Math.min(100, Math.max(0, p)) / 100) * barW)
       return (
         <Box flexDirection="column">
           <Box>
             <Text bold>{label.padEnd(6)}</Text>
-            <Text color={lim ? step(p, lim) : color(p)}>{'█'.repeat(n)}</Text>
+            <Text color={col ?? (lim ? step(p, lim) : color(p))}>{'█'.repeat(n)}</Text>
             <Text dimColor>{'░'.repeat(barW - n)}</Text>
             <Text> {right ?? String(Math.round(p)).padStart(3) + '%'}</Text>
           </Box>
@@ -284,6 +572,11 @@ export const register: Register = on => {
     const limits = (usage?.rateLimits ?? []).filter(r => RL_LABEL[r.kind])
     const terminal = e.surface === 'terminal'
     if (terminal) divCols = cols
+    // Lavori: prima quelli in corso (i più recenti in alto), poi i finiti; al massimo 6.
+    const J = [...(await read($, jobs))].sort((a, b) =>
+      (a.done ? 1 : 0) - (b.done ? 1 : 0) || b.startedAt - a.startedAt)
+    const shown = J.slice(0, 6)
+    const anyRunning = J.some(j => !j.done)
     return (
       <Box flexDirection="column">
         <Text bold color="claude">{s.host}  <Text dimColor>up {s.uptime}</Text></Text>
@@ -324,6 +617,42 @@ export const register: Register = on => {
           return <Bar key={r.kind} label={RL_LABEL[r.kind]!} p={r.percentUsed}
             info={Number.isFinite(at) ? `reset tra ${fmtIn(at - s.at)}` : undefined} />
         })}
+        {terminal && anyRunning
+          ? h($.ui.resolve(e).Raster, { key: DIV2_KEY, columns: cols, rows: 1, cells: divFrame(cols, div2T, HEAD2, TAIL2) })
+          : <Text dimColor>{'─'.repeat(cols)}</Text>}
+        {J.length === 0
+          ? <Text wrap="truncate"><Text bold>{'Lavori'}</Text><Text dimColor>  nessuno in background</Text></Text>
+          : <Text wrap="truncate"><Text bold>{'Lavori'}</Text><Text dimColor>{`  ${J.filter(j => !j.done).length} in corso`}</Text></Text>}
+        {shown.map(j => {
+          const end = j.done?.at ?? s.at
+          const dur = fmtDur(end - j.startedAt)
+          const stalled = !j.done && j.kind !== 'agent' && j.size > 0 && s.at - j.changedAt > STALL
+          const icon = j.done ? (j.done.code === 0 || j.done.code === null ? '✓' : '✗') : stalled ? '⚠' : '●'
+          const icCol = j.done ? (j.done.code === 0 || j.done.code === null ? 'success' : 'error') : stalled ? 'warning' : 'suggestion'
+          const nameW = Math.max(4, cols - 3 - dur.length)
+          const name = j.name.length > nameW ? j.name.slice(0, nameW - 1) + '…' : j.name.padEnd(nameW)
+          const bits: string[] = []
+          if (j.done && j.done.code !== null && j.done.code !== 0) bits.push(`uscita ${j.done.code}`)
+          if (j.kind === 'file' || (j.pct === null && !j.text && j.size > 0)) bits.push(fmtB(j.size))
+          if (!j.done && j.rate > 0) bits.push(`${fmtB(j.rate)}/s`)
+          if (stalled) bits.push(`fermo da ${fmtDur(s.at - j.changedAt)}`)
+          // Con la barra, la riga grezza serve solo se dice qualcosa a parole (non il misuratore di curl o wget).
+          const words = j.pct === null || /\p{L}{3}/u.test(j.text)
+          const info = [words ? j.text : '', bits.join(' · ')].filter(Boolean)
+            .map(t => (t.length > cols - 2 ? t.slice(0, cols - 3) + '…' : t))
+          return (
+            <Box key={j.id} flexDirection="column">
+              <Text wrap="truncate">
+                <Text color={icCol}>{icon + ' '}</Text>
+                <Text bold={!j.done} dimColor={!!j.done}>{name}</Text>
+                <Text dimColor>{' ' + dur}</Text>
+              </Text>
+              {j.pct !== null && !j.done && <Bar label="" p={j.pct} col="suggestion" right={`${String(Math.floor(j.pct)).padStart(3)}%`} />}
+              {info.map((t, i) => <Text key={String(i)} dimColor wrap="truncate">{'  ' + t}</Text>)}
+            </Box>
+          )
+        })}
+        {J.length > shown.length && <Text dimColor>{`  +${J.length - shown.length} altri`}</Text>}
       </Box>
     )
   })

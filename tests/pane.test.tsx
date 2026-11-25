@@ -132,3 +132,40 @@ for (const [nome, usage, attesi] of [
     await ui.unmount()
   })
 }
+
+test('sezione Lavori sotto i limiti, con barra, fermo ed esito', async ($, on) => {
+  const now = 10_000_000
+  const J = [
+    { id: 'a1', kind: 'bash', name: 'Scarica modello Wan 14B', path: '/t/a1.output', pct: 54.3, text: '54 1.2G 54 640M 0 0 8.1M 0 0:02:31 0:01:10 0:01:21 8.2M', size: 1000, rate: 8_400_000, startedAt: now - 70_000, changedAt: now - 1000, done: null },
+    { id: 'file:/p/b.log', kind: 'file', name: 'build lab', path: '/p/b.log', pct: null, text: 'Compiling foo v0.1', size: 40_000, rate: 0, startedAt: now - 400_000, changedAt: now - 180_000, done: null },
+    { id: 'agent:x', kind: 'agent', name: 'Cerca driver', path: null, pct: null, text: 'Explore · 12k token', size: 0, rate: 0, startedAt: now - 30_000, changedAt: now, done: null },
+    { id: 'b2', kind: 'bash', name: 'pip install torch', path: '/t/b2.output', pct: null, text: 'Successfully installed torch', size: 900, rate: 0, startedAt: now - 100_000, changedAt: now - 58_000, done: { code: 0, at: now - 58_000 } },
+    { id: 'b3', kind: 'bash', name: 'make test', path: '/t/b3.output', pct: null, text: 'error: 2 failed', size: 900, rate: 0, startedAt: now - 50_000, changedAt: now - 5_000, done: { code: 2, at: now - 5_000 } },
+  ]
+  on('command.register', () => ({ value: { command: 'stato' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.every', () => ({ value: { cancel: () => {} } } as any))
+  on('clock.now', () => ({ value: now }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [{ kind: 'five_hour', percentUsed: 30, resetsAt: new Date(now + 3_600_000).toISOString() }] } } as any))
+  on('state.get', ($, e: any, next: any) =>
+    e.key === 'jobs' ? { value: { value: { shape: 'jobs-1', value: J }, version: 1 } } : next(e))
+  on('fs.read', (_, e: any) => ({ value: FILES[e.path] ?? '' }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } } as any))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' } as any)
+  const txt = flat(await ui.drawn())
+  ;(globalThis as any).console.log('\n' + txt.split('\n').slice(-19).join('\n'))
+  expect(txt).toMatch(/reset tra[^]*─{34}\nLavori  3 in corso/)
+  expect(txt).toMatch(/● Scarica modello Wan 14B +1m 10s/)
+  expect(txt).toMatch(/ +█+░+  54%/)
+  expect(txt).toMatch(/8\.0M\/s/)
+  expect(txt).toMatch(/⚠ build lab/)
+  expect(txt).toMatch(/fermo da 3m 00s/)
+  expect(txt).toMatch(/✓ pip install torch +42s/)
+  expect(txt).toMatch(/✗ make test +45s/)
+  expect(txt).toMatch(/uscita 2/)
+  for (const line of txt.split('\n')) expect(line.length <= 34).toBe(true)
+  await ui.unmount()
+})
