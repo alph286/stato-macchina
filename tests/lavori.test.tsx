@@ -88,4 +88,6 @@ test('id e percorso dal risultato di un comando in background', () => {
     id: 'be7d4hv93', path: '/tmp/claude-1000/p/s/tasks/be7d4hv93.output',
   })
   expect(bgFromText('ok')).toBe(null)
+  // La stessa frase stampata più in basso da un grep non è un comando in background.
+  expect(bgFromText("tests/a.ts:19: test(\ntests/a.ts:82: bgFromText('Command running in background with ID: be7d4hv93. Output is being written to: /tmp/x/tasks/be7d4hv93.output')")).toBe(null)
 })

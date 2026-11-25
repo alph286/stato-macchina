@@ -1,6 +1,6 @@
 {
   "name": "stato-macchina",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Pannello con CPU, GPU, RAM, swap, disco, temperatura, costo della sessione, contesto, limiti d'uso e avanzamento dei lavori in background della macchina su cui gira Claude Code",
   "author": {
     "name": "alph286"
