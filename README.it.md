@@ -130,7 +130,9 @@ Da dove vengono:
   `tmux new -d`): una riga per comando, che segue il log (`>`, `>>`, `tee`,
   `--log`, `wget -o`) o, se non c'è, il file scaricato (`curl -o/-O`,
   `wget -O`: solo dimensione e velocità). Le chiamate a `traccia` nello stesso
-  comando non nascondono il resto. Sparisce dopo 15 minuti senza scritture.
+  comando non nascondono il resto. Finisce quando nessun processo tiene più aperto il file (controllato in
+  `/proc` dopo 3 secondi senza scritture); sparisce dopo 15 minuti senza
+  scritture se non si può controllare.
 - **`traccia`**: ogni altro file, con `traccia <file> "descrizione"` (e
   `traccia --fine <file>` alla fine). Lo script è in `bin/` della mod, quindi
   è nel `PATH` dei comandi di Claude; scrive in

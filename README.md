@@ -134,7 +134,9 @@ Where they come from:
   `tmux new -d`): one row per command, following its log (`>`, `>>`, `tee`,
   `--log`, `wget -o`) or, when there is none, the downloaded file (`curl -o/-O`,
   `wget -O`: size and speed only). A `traccia` call in the same command does
-  not hide the rest. Dropped after 15 minutes without writes.
+  not hide the rest. Marked done when no process holds the file open any more (checked in
+  `/proc` after 3 seconds without writes); dropped after 15 minutes without
+  writes if that check is not possible.
 - **`traccia`**: any other file, with `traccia <file> "description"` (and
   `traccia --fine <file>` when done). The script is in the mod's `bin/`, so it
   is on the `PATH` of Claude's commands; it writes to

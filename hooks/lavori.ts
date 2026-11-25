@@ -68,6 +68,16 @@ function frac(a: string, b: string): number | null {
   return y > 0 && x >= 0 && x <= y ? (100 * x) / y : null
 }
 
+/** Comando che elenca i file aperti dai processi dell'utente (destinazioni dei link in /proc/<pid>/fd). */
+export const OPEN_FILES_CMD = ['sh', '-c', 'find /proc/[0-9]*/fd -maxdepth 1 -type l -printf "%l\\n" 2>/dev/null; exit 0']
+
+/** I percorsi assoluti dall'output di OPEN_FILES_CMD (senza pipe, socket e file cancellati). */
+export function openPaths(out: string): Set<string> {
+  const s = new Set<string>()
+  for (const l of out.split('\n')) if (l.startsWith('/') && !l.endsWith(' (deleted)')) s.add(l)
+  return s
+}
+
 /** Il comando gira staccato dal turno (nohup, setsid, & finale, screen/tmux -d)? */
 export function isDetached(cmd: string): boolean {
   return /(^|[;&|(]\s*)(nohup|setsid)\b/.test(cmd)

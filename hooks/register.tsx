@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Job, Llm, Snapshot } from '../types'
-import { bgFromText, fmtB, fmtDur, isDetached, parseProgress, scanFiles } from './lavori'
+import { bgFromText, fmtB, fmtDur, isDetached, OPEN_FILES_CMD, openPaths, parseProgress, scanFiles } from './lavori'
 
 const PANE = 'stato-macchina'
 const snap = atom({ plugin: 'stato-macchina', key: 'snap' } as const, null, {
@@ -203,6 +203,10 @@ type Tracked = {
   downloads?: string[]
   /** File seguito senza un task che dica quando finisce (nohup, traccia). */
   detached: boolean
+  /** Comando staccato: finisce quando nessun processo tiene più aperti i suoi file. */
+  holder?: boolean
+  /** Giri consecutivi in cui nessun processo teneva aperto il file. */
+  misses?: number
   seen: boolean
 }
 const tracked = new Map<string, Tracked>()
@@ -218,6 +222,7 @@ let scanning = false
 const DONE_KEEP = 120_000 // un lavoro finito resta visibile 2 minuti
 const STALL = 60_000 // un log fermo da 1 minuto diventa giallo
 const DETACHED_DROP = 15 * 60_000 // un file staccato fermo da 15 minuti sparisce
+const HOLDER_IDLE = 3_000 // dopo 3 s senza scritture si controlla se un processo tiene aperto il file
 
 function track(id: string, t: Omit<Tracked, 'seen'>) {
   if (!tracked.has(id)) tracked.set(id, { ...t, seen: false })
@@ -242,7 +247,7 @@ function onToolResult(use: { tool: string; input: Record<string, unknown> }, tex
       const [first, ...rest] = [...files, ...downloads]
       if (first) track(`file:${first}`, {
         kind: 'file', name, path: first, startedAt: at,
-        files: rest.filter(f => files.includes(f)), downloads: rest.filter(f => downloads.includes(f)), detached: true,
+        files: rest.filter(f => files.includes(f)), downloads: rest.filter(f => downloads.includes(f)), detached: true, holder: true,
       })
     }
   } else if (use.tool === 'Monitor') {
@@ -356,6 +361,8 @@ async function scanJobs($: EngineInterface): Promise<void> {
 
     const old = new Map((await read($, jobs)).map(j => [j.id, j]))
     const out: Job[] = []
+    // File aperti dai processi: letti al massimo una volta per giro, solo se serve.
+    let open: Set<string> | null | undefined
     for (const [id, t] of tracked) {
       const prev = old.get(id)
       const startedAt = prev?.startedAt ?? t.startedAt
@@ -407,6 +414,21 @@ async function scanJobs($: EngineInterface): Promise<void> {
       // L'esito si data all'ultima scrittura del file: un task finito da tempo non ricompare.
       if (!done && exit !== null) done = { code: exit, at: Math.min(now, st.mtimeMs || now) }
       if (!done && ended) done = { code: null, at: ended }
+      // Comando staccato fermo da qualche secondo: finito se nessun processo ha
+      // più aperto i suoi file per due giri di fila (l'esito non si conosce).
+      if (!done && t.holder && now - st.mtimeMs > HOLDER_IDLE) {
+        if (open === undefined) {
+          try {
+            const r = await $.process.run(OPEN_FILES_CMD, { timeoutMs: 5000 })
+            open = r.exitCode === 0 ? openPaths(String(r.stdout)) : null
+          } catch { open = null }
+        }
+        if (open) {
+          const mine = [t.path, ...t.files, ...(t.downloads ?? [])]
+          t.misses = mine.some(f => f && open!.has(f)) ? 0 : (t.misses ?? 0) + 1
+          if (t.misses >= 2) done = { code: null, at: Math.min(now, st.mtimeMs || now) }
+        }
+      }
       if (done && now - done.at > DONE_KEEP) { tracked.delete(id); continue }
       if (!done && t.detached && now - changedAt > DETACHED_DROP) { tracked.delete(id); continue }
       out.push({ id, kind: t.kind, name: t.name, path, pct, text, size: st.size, rate, startedAt, changedAt, done })

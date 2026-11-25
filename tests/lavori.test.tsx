@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { bgFromText, detectFiles, isDetached, parseProgress, scanFiles } from '../hooks/lavori'
+import { bgFromText, detectFiles, isDetached, openPaths, parseProgress, scanFiles } from '../hooks/lavori'
 import { CAMPIONI } from './campioni'
 
 // Percentuale attesa da ogni campione reale (null = nessuna percentuale da trovare).
@@ -52,6 +52,11 @@ test('comandi staccati', () => {
   expect(isDetached('tmux new -s a -d "make"')).toBe(true)
   expect(isDetached('make && make test')).toBe(false)
   expect(isDetached('ls > out.txt')).toBe(false)
+})
+
+test('file aperti dai processi', () => {
+  const s = openPaths('/dev/null\n/home/a/train.log\npipe:[123]\nsocket:[9]\n/tmp/x.log (deleted)\n\n')
+  expect([...s].sort()).toEqual(['/dev/null', '/home/a/train.log'])
 })
 
 test('file di log e download nel comando', () => {
